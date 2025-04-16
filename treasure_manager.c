@@ -25,11 +25,10 @@ typedef struct Treasure{
 
 void log_action(const char *hunt_id, const char *action) 
 {   
-    //construim calea/path
     char path[128];
     strcpy(path,hunt_id);
     strcat(path,"/");
-    strcat(path,TREASURE_FILE);
+    strcat(path,LOG_FILE);
     int fis=open(path, O_WRONLY | O_APPEND | O_CREAT,0644);
     if(fis==-1)
     {
@@ -41,7 +40,6 @@ void log_action(const char *hunt_id, const char *action)
     strcat(buffer,"\n");
     write(fis,buffer,strlen(buffer));
     close(fis);
-    // Creeaza legatura simbolica
     char link_name[64];
     strcpy(link_name,"logged_hunt-");
     strcat(link_name,hunt_id);
@@ -49,14 +47,19 @@ void log_action(const char *hunt_id, const char *action)
 }
 void add_treasure(const char *hunt_id) 
 {   
-    //creez director nou
-    mkdir(hunt_id,0755);
-    //Construim calea/path
+    struct stat st={0};
+    if(stat(hunt_id,&st)==-1)
+    {
+        if(mkdir(hunt_id, 0755)==-1)
+        {
+            perror("Eroare la creare director nou");
+            exit(-1);
+        }
+    }
     char path[128];
     strcpy(path,hunt_id);
     strcat(path,"/");
     strcat(path,TREASURE_FILE);
-    //Citim datele de la tastatura
     Treasure t;
     printf("Treasure ID: ");
     scanf("%s",t.id);
@@ -66,10 +69,10 @@ void add_treasure(const char *hunt_id)
     scanf("%lf",&t.latitude);
     printf("Longitude: ");
     scanf("%lf",&t.longitude);
-    getchar(); //consuma\n
+    getchar();
     printf("Clue: ");
     fgets(t.clue,MAX_CLUE,stdin);
-    t.clue[strcspn(t.clue,"\n")]='\0'; //elimina\n
+    t.clue[strcspn(t.clue,"\n")]='\0';
     printf("Value: ");
     scanf("%d",&t.value);
     int fis=open(path, O_WRONLY | O_APPEND | O_CREAT,0644);
@@ -80,11 +83,12 @@ void add_treasure(const char *hunt_id)
     }
     write(fis,&t,TREASURE_SIZE);
     close(fis);
-    log_action(hunt_id,"Am adaugat comoara");
+    char mesaj[256];
+    sprintf(mesaj,"Am adaugat comoara cu id: %s",t.id);
+    log_action(hunt_id,mesaj);
 }
 void list_treasures(const char *hunt_id) 
 {
-    //Construim calea
     char path[128];
     strcpy(path,hunt_id);
     strcat(path,"/");
@@ -97,8 +101,8 @@ void list_treasures(const char *hunt_id)
     }
     printf("Hunt: %s\n",hunt_id);
     printf("Size: %lld bytes\n",st.st_size);
-    printf("Last modified: %s",ctime(&st.st_mtime));
-    int fis=open(path, O_RDONLY);
+    printf("Ultima modificare: %s",ctime(&st.st_mtime));
+    int fis=open(path,O_RDONLY);
     if(fis==-1)
     {
         perror("Eroare la deschidere fisier treasure file");
@@ -111,11 +115,12 @@ void list_treasures(const char *hunt_id)
         printf("Clue: %s\n\n",t.clue);
     }
     close(fis);
-    log_action(hunt_id,"Listez comori");
+    char mesaj[256];
+    sprintf(mesaj,"Am listat comoarile");
+    log_action(hunt_id,mesaj);
 }
 void view_treasure(const char *hunt_id, const char *id) 
 {   
-    //Construim calea
     char path[128];
     strcpy(path,hunt_id);
     strcat(path,"/");
@@ -131,10 +136,12 @@ void view_treasure(const char *hunt_id, const char *id)
     {
         if(strcmp(t.id,id)==0)
         {
-            printf("Treasure Found:\nID: %s\nUser: %s\nLat: %.2f\nLon: %.2f\nClue: %s\nValue: %d\n",t.id, t.user, t.latitude, t.longitude, t.clue, t.value);
-            log_action(hunt_id,"Viewed treasure");
+            printf("ID: %s\nUser: %s\nLat: %.2f\nLon: %.2f\nClue: %s\nValue: %d\n",t.id, t.user, t.latitude, t.longitude, t.clue, t.value);
+            char mesaj[256];
+            sprintf(mesaj,"Am vizualizat comoara cu id: %s",t.id);
+            log_action(hunt_id,mesaj);
             close(fis);
-            exit(-1);
+            return;
         }
     }
     printf("Comoara nu exista\n");
@@ -142,7 +149,6 @@ void view_treasure(const char *hunt_id, const char *id)
 }
 void remove_treasure(const char *hunt_id, const char *id) 
 {   
-    //Construim calea
     char path[128];
     strcpy(path,hunt_id);
     strcat(path,"/");
@@ -179,7 +185,9 @@ void remove_treasure(const char *hunt_id, const char *id)
     {
         rename("temp.dat",path);
         printf("Comaoara stearsa\n");
-        log_action(hunt_id,"Eliminam comoara");
+        char mesaj[256];
+        sprintf(mesaj,"Am eliminat comoara cu id: %s",t.id);
+        log_action(hunt_id,mesaj);
     } 
     else
     {
@@ -189,18 +197,35 @@ void remove_treasure(const char *hunt_id, const char *id)
 }
 void remove_hunt(const char *hunt_id) 
 {
-    //Construim calea
-    char path[128];
-    strcpy(path,hunt_id);
-    strcat(path,"/");
-    strcat(path,TREASURE_FILE);
-    unlink(path);
-    strcpy(path,hunt_id);
-    strcat(path,"/");
-    strcat(path,LOG_FILE);
-    unlink(path);
-    rmdir(hunt_id);
-    printf("Vanatoare eliminata\n");
+    DIR *dir=opendir(hunt_id);
+    if(!dir)
+    {
+        perror("Eroare la deschiderea directorului");
+        return;
+    }
+    struct dirent *entry;
+    char path[256];
+    while((entry=readdir(dir))!=NULL) 
+    {
+        if(strcmp(entry->d_name,".")==0 || strcmp(entry->d_name,"..")==0)
+            continue;
+        strcpy(path,hunt_id);
+        strcat(path,"/");
+        strcat(path,entry->d_name);
+        if(unlink(path)==-1) 
+        {
+            perror("Eroare la stergerea fisierului");
+        }
+    }
+    closedir(dir);
+    if(rmdir(hunt_id)==-1) 
+    {
+        perror("Eroare la stergerea directorului");
+    } 
+    else 
+    {
+        printf("Vanatoare eliminata\n");
+    }
     char link_name[64];
     strcpy(link_name,"logged_hunt-");
     strcat(link_name,hunt_id);
