@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <time.h>
 #include <errno.h>
+#include <signal.h>
 
 #define MAX_NAME 32
 #define MAX_CLUE 128
@@ -231,8 +232,91 @@ void remove_hunt(const char *hunt_id)
     strcat(link_name,hunt_id);
     unlink(link_name);
 }
+
+// ---------------- Monitor Integration ----------------
+
+void listeaza_vanatori() 
+{
+    DIR *dir=opendir(".");
+    struct dirent *entry;
+    while((entry=readdir(dir))!=NULL)
+    {
+        if(entry->d_type==DT_DIR && strcmp(entry->d_name,".") && strcmp(entry->d_name,".."))
+        {
+            char cale[256];
+            sprintf(cale,"%s/%s",entry->d_name,TREASURE_FILE);
+            FILE *fis=fopen(cale,"rb");
+            if(!fis)
+                continue;
+            int count=0;
+            Treasure c;
+            while(fread(&c,sizeof(Treasure),1,fis)==1)
+                count++;
+            fclose(fis);
+            printf("Vanatoare: %s | Comori: %d\n",entry->d_name,count);
+        }
+    }
+    closedir(dir);
+}
+void gestioneaza_comanda(int semnal) 
+{
+    FILE *fis=fopen("monitor_cmd.txt","r");
+    if(!fis) 
+    {
+        perror("Eroare la deschiderea fisierului de comenzi");
+        return;
+    }
+    char comanda[64],vanatoare[64],id[64];
+    fscanf(fis,"%s",comanda);
+    if(strcmp(comanda,"list_hunts")==0)
+    {
+        listeaza_vanatori();
+    } 
+    else if(strcmp(comanda,"list_treasures")==0)
+    {       
+        fscanf(fis,"%s",vanatoare);
+        vanatoare[strcspn(vanatoare,"\n")]='\0';
+        list_treasures(vanatoare);
+        strcpy(vanatoare,"");
+    } 
+    else if(strcmp(comanda,"view_treasure")==0)
+    {   
+        fscanf(fis,"%s",vanatoare);
+        fscanf(fis,"%s",id);
+        view_treasure(vanatoare,id);
+        strcpy(vanatoare,"");
+        strcpy(id,"");
+    }
+    fclose(fis);
+}
+void opreste_monitor(int semnal) 
+{
+    printf("Monitorul se opreste...\n");
+    usleep(3000000);
+    exit(0);
+}
+
 int main(int argc,char *argv[])
 {
+    if(argc==2 && strcmp(argv[1],"--monitor")==0)
+    {
+        struct sigaction sa;
+        sa.sa_handler = gestioneaza_comanda;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+        sigaction(SIGUSR1, &sa, NULL);
+
+        struct sigaction sa_term;
+        sa_term.sa_handler = opreste_monitor;
+        sigemptyset(&sa_term.sa_mask);
+        sa_term.sa_flags = 0;
+        sigaction(SIGTERM, &sa_term, NULL);
+
+        while(1) 
+        {
+            pause();
+        }
+    }
     if(argc<3) 
     {   
         printf("Eroare la introducere numar argumente:\n");
@@ -242,7 +326,6 @@ int main(int argc,char *argv[])
         printf("%s --view <hunt_id> <id>\n",argv[0]);
         printf("%s --remove_treasure <hunt_id> <id>\n",argv[0]);
         printf("%s --remove_hunt <hunt_id>\n",argv[0]);
-        exit(-1);
     }
     if(strcmp(argv[1],"--add")==0)
         add_treasure(argv[2]);
