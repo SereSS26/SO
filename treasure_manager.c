@@ -24,6 +24,16 @@ typedef struct Treasure{
     int value;
 }Treasure;
 
+volatile sig_atomic_t received_signal=0;
+
+void sigusr1_handler(int sig) 
+{
+    received_signal=SIGUSR1;
+}
+void sigusr2_handler(int sig)
+{
+    received_signal=SIGUSR2;
+}
 void log_action(const char *hunt_id, const char *action) 
 {   
     char path[128];
@@ -233,88 +243,90 @@ void remove_hunt(const char *hunt_id)
     unlink(link_name);
 }
 
-// ---------------- Monitor Integration ----------------
-
-void listeaza_vanatori() 
-{
-    DIR *dir=opendir(".");
-    struct dirent *entry;
-    while((entry=readdir(dir))!=NULL)
-    {
-        if(entry->d_type==DT_DIR && strcmp(entry->d_name,".") && strcmp(entry->d_name,".."))
-        {
-            char cale[256];
-            sprintf(cale,"%s/%s",entry->d_name,TREASURE_FILE);
-            FILE *fis=fopen(cale,"rb");
-            if(!fis)
-                continue;
-            int count=0;
-            Treasure c;
-            while(fread(&c,sizeof(Treasure),1,fis)==1)
-                count++;
-            fclose(fis);
-            printf("Vanatoare: %s | Comori: %d\n",entry->d_name,count);
-        }
-    }
-    closedir(dir);
-}
-void gestioneaza_comanda(int semnal) 
-{
-    FILE *fis=fopen("monitor_cmd.txt","r");
-    if(!fis) 
-    {
-        perror("Eroare la deschiderea fisierului de comenzi");
-        return;
-    }
-    char comanda[64],vanatoare[64],id[64];
-    fscanf(fis,"%s",comanda);
-    if(strcmp(comanda,"list_hunts")==0)
-    {
-        listeaza_vanatori();
-    } 
-    else if(strcmp(comanda,"list_treasures")==0)
-    {       
-        fscanf(fis,"%s",vanatoare);
-        vanatoare[strcspn(vanatoare,"\n")]='\0';
-        list_treasures(vanatoare);
-        strcpy(vanatoare,"");
-    } 
-    else if(strcmp(comanda,"view_treasure")==0)
-    {   
-        fscanf(fis,"%s",vanatoare);
-        fscanf(fis,"%s",id);
-        view_treasure(vanatoare,id);
-        strcpy(vanatoare,"");
-        strcpy(id,"");
-    }
-    fclose(fis);
-}
-void opreste_monitor(int semnal) 
-{
-    printf("Monitorul se opreste...\n");
-    usleep(3000000);
-    exit(0);
-}
-
 int main(int argc,char *argv[])
 {
     if(argc==2 && strcmp(argv[1],"--monitor")==0)
     {
-        struct sigaction sa;
-        sa.sa_handler = gestioneaza_comanda;
-        sigemptyset(&sa.sa_mask);
-        sa.sa_flags = 0;
-        sigaction(SIGUSR1, &sa, NULL);
+        struct sigaction sa1,sa2;
+        sa1.sa_handler=sigusr1_handler;
+        sigemptyset(&sa1.sa_mask);
+        sa1.sa_flags=0;
+        sigaction(SIGUSR1,&sa1,NULL);
 
-        struct sigaction sa_term;
-        sa_term.sa_handler = opreste_monitor;
-        sigemptyset(&sa_term.sa_mask);
-        sa_term.sa_flags = 0;
-        sigaction(SIGTERM, &sa_term, NULL);
-
+        sa2.sa_handler=sigusr2_handler;
+        sigemptyset(&sa2.sa_mask);
+        sa2.sa_flags=0;
+        sigaction(SIGUSR2,&sa2,NULL);
         while(1) 
         {
             pause();
+            if(received_signal==SIGUSR1)
+            {
+                received_signal=0;
+                FILE *f=fopen("cmd.txt","r");
+                if(!f)
+                {
+                    perror("Nu pot deschide cmd.txt");
+                    continue;
+                }
+                char line[256];
+                fgets(line,sizeof(line),f);
+                fclose(f);
+                char *cmd=strtok(line," \n");
+                if(!cmd)
+                    continue;
+                if(strcmp(cmd,"list_hunts")==0)
+                {
+                    DIR *d=opendir(".");
+                    if(!d)
+                    {
+                        perror("Nu pot deschide directorul curent");
+                        continue;
+                    }
+                    struct dirent *entry;
+                    while((entry=readdir(d))!=NULL) 
+                    {
+                        if(entry->d_type==DT_DIR && strcmp(entry->d_name, ".")!=0 && strcmp(entry->d_name,"..")!=0) 
+                        {
+                            char path[256];
+                            snprintf(path,sizeof(path),"%s/%s",entry->d_name,TREASURE_FILE);
+                            struct stat st;
+                            if(stat(path,&st)==0)
+                            {
+                                printf("%s (%lld bytes)\n",entry->d_name,(long long)st.st_size);
+                            }
+                        }
+                    }
+                    closedir(d);
+                }
+                else if(strcmp(cmd,"list_treasures")==0)
+                {
+                    char *hunt_id=strtok(NULL,"\n");
+                    if(hunt_id)
+                        list_treasures(hunt_id);
+                    else
+                        printf("Missing hunt_id for list_treasures\n");
+                }
+                else if(strcmp(cmd,"view_treasure")==0)
+                {
+                    char *hunt_id=strtok(NULL," \n");
+                    char *treasure_id=strtok(NULL," \n");
+                    if(hunt_id && treasure_id)
+                        view_treasure(hunt_id,treasure_id);
+                    else
+                        printf("Missing arguments for view_treasure\n");
+                } 
+                else 
+                {
+                    printf("Comanda necunoscuta: %s\n",cmd);
+                }
+                fflush(stdout); 
+            }
+            if(received_signal==SIGUSR2)
+            {
+                usleep(500000);
+                exit(0);
+            }
         }
     }
     if(argc<3) 
